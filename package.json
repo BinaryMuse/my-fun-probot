@@ -13,17 +13,19 @@
     "probot-app"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "dev": "nodemon --exec \"npm start\"",
-    "start": "probot run ./lib/index.js",
+    "dev": "nodemon -w src/**/* -e js,ts,mjs,json --exec \"npm start\"",
+    "start": "ts-node ./node_modules/probot/bin/probot-run ./src/index.ts",
     "lint": "standard **/*.ts --fix",
     "test": "jest && standard **/*.ts",
     "test:watch": "jest --watch --notify --notifyMode=change --coverage"
   },
   "dependencies": {
-    "nock": "^10.0.0",
+    "@binarymuse/tsmonad": "^0.8.1",
     "@types/nock": "^9.3.0",
-    "probot": "^7.2.0"
+    "nock": "^10.0.0",
+    "probot": "^7.2.0",
+    "probot-metadata": "^1.0.0",
+    "ts-node": "^8.4.1"
   },
   "devDependencies": {
     "@types/jest": "^24.0.0",

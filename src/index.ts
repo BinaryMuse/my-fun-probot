@@ -1,13 +1,13 @@
-import { Application } from 'probot' // eslint-disable-line no-unused-vars
+import { Application, Context } from 'probot' // eslint-disable-line no-unused-vars
+
+import { withConfig } from './config'
+import handlePush from './push'
 
 export = (app: Application) => {
-  app.on('issues.opened', async (context) => {
-    const issueComment = context.issue({ body: 'Thanks for opening this issue!' })
-    await context.github.issues.createComment(issueComment)
-  })
-  // For more information on building apps:
-  // https://probot.github.io/docs/
+  app.on('issue_comment.created', withConfig(handleIssueComment))
+  app.on('push', withConfig(handlePush))
+}
 
-  // To get your app running against GitHub, see:
-  // https://probot.github.io/docs/development/
+async function handleIssueComment (context: Context): Promise<void> {
+  // check to see if is a command? or should we just use the plugin?
 }
