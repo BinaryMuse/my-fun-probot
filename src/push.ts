@@ -97,11 +97,11 @@ class PushHandler extends Handler {
     }))
   }
 
-  async mergeBranch (refToUpdate: Ref, refToCopy: Ref): Promise<void> {
+  async mergeBranch (baseRef: Ref, headRef: Ref): Promise<void> {
     await this.context.github.repos.merge(this.context.repo({
-      base: refToUpdate.branch,
-      head: refToCopy.branch,
-      commit_message: `Auto-merging ${refToCopy.branch} into ${refToUpdate.branch}`
+      base: baseRef.branch,
+      head: headRef.branch,
+      commit_message: `Auto-merging ${headRef.branch} into ${baseRef.branch}`
     }))
   }
 
