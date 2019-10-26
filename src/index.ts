@@ -1,11 +1,11 @@
 import { Application, Context } from 'probot' // eslint-disable-line no-unused-vars
 
-import { withConfig } from './config'
-import handlePush from './push'
+import PushHandler from './push'
+import { Handler } from './lib/handler'
 
 export = (app: Application) => {
-  app.on('issue_comment.created', withConfig(handleIssueComment))
-  app.on('push', withConfig(handlePush))
+  app.on('issue_comment.created', handleIssueComment)
+  app.on('push', Handler.generate(PushHandler))
 }
 
 async function handleIssueComment (context: Context): Promise<void> {
