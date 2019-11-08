@@ -13,23 +13,29 @@
     "probot-app"
   ],
   "scripts": {
-    "dev": "nodemon -w src/**/* -e js,ts,mjs,json --exec \"npm start\"",
-    "start": "ts-node ./node_modules/probot/bin/probot-run ./src/index.ts",
+    "dev": "nodemon -w src -e js,ts,mjs,json --exec \"npm start\"",
+    "start": "ts-node ./node_modules/@binarymuse/probot/bin/probot-run ./src/index.ts",
     "lint": "standard **/*.ts --fix",
     "test": "jest && standard **/*.ts",
     "test:watch": "jest --watch --notify --notifyMode=change --coverage"
   },
   "dependencies": {
-    "@binarymuse/tsmonad": "^0.8.1",
+    "@binarymuse/probot": "9.6.1-rc1",
+    "@octokit/rest": "^16.34.1",
     "@types/nock": "^9.3.0",
+    "conventional-commits-parser": "^3.0.5",
+    "dedent": "^0.7.0",
     "nock": "^10.0.0",
-    "probot": "^7.2.0",
+    "probot-commands": "^1.1.0",
     "probot-metadata": "BinaryMuse/metadata#97747f3",
+    "split2": "^3.1.1",
     "ts-node": "^8.4.1"
   },
   "devDependencies": {
+    "@types/dedent": "^0.7.0",
     "@types/jest": "^24.0.0",
-    "@types/node": "^11.9.0",
+    "@types/node": "^11.15.2",
+    "@types/split2": "^2.1.6",
     "eslint-plugin-typescript": "^0.14.0",
     "jest": "^24.0.0",
     "nodemon": "^1.17.2",
@@ -53,5 +59,10 @@
   },
   "jest": {
     "testEnvironment": "node"
+  },
+  "nodemonConfig": {
+    "ignore": [
+      "*.test.*"
+    ]
   }
 }

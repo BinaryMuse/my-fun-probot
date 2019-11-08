@@ -1,5 +1,3 @@
-import { Context } from "probot"
-
 export interface Config {
   defaultBranch: string
   baseBranch: string
@@ -9,5 +7,5 @@ export interface Config {
 export const DEFAULT_CONFIG: Config = {
   defaultBranch: 'develop',
   baseBranch: 'master',
-  botName: 'my-fun-probot[bot]'
+  botName: 'semantic-pr[bot]'
 }

@@ -1,6 +1,6 @@
 declare module 'probot-metadata' {
-  import { Context } from 'probot'
-  import { IssuesGetParams } from '@octokit/rest';
+  import { Context } from '@binarymuse/probot'
+  import { IssuesGetParams } from '@octokit/rest'
 
   function metadata<T = any>(context: Context, issue: IssuesGetParams | null): {
     set: (key: string, value: T) => Promise<void>,

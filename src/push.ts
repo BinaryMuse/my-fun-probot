@@ -1,133 +1,152 @@
-import { PullRequestsListResponseItem } from '@octokit/rest'
-import { Maybe } from '@binarymuse/tsmonad'
-import metadata from 'probot-metadata'
+import { PullsListResponseItem, PullsListResponse, Response } from '@octokit/rest'
+import { Context } from '@binarymuse/probot'
 
 import { Config, DEFAULT_CONFIG } from './config'
-import { Handler } from './lib/handler'
+import { HandlerWithConfig } from './lib/handler'
+import { LockOps } from './lib/lock-ops'
+import { Ref, GitOps } from './lib/git-ops'
+import generateChangelog, { Changelog } from './lib/commit-parser'
 
+export default class PushHandler extends HandlerWithConfig<Config> {
+  private git: GitOps
+  private lock: LockOps
 
-class PushHandler extends Handler {
-  private getConfig(): Promise<Config> {
-    return this.context.config('my-fun-probot.yaml', DEFAULT_CONFIG)
+  static async build(context: Context): Promise<PushHandler> {
+    const config = await context.config('my-fun-probot.yaml', DEFAULT_CONFIG) as Config
+    return new this(context, config)
+  }
+
+  constructor(context: Context, config: Config) {
+    super(context, config)
+    this.git = new GitOps(context)
+    this.lock = new LockOps(context)
   }
 
   public async handle() {
-    const context = this.context
-    const config = await this.getConfig()
-    // TODO: make this configurable, perhaps even a glob?
-    if (context.payload.ref.startsWith('/refs/heads/release/')) {
-      // this is one of our PRs! We'll ignore it, unless we're waiting
-      // for the user to push up a resolution to a merge conflict
-      // in which case we'll update the PR
+    this.context.log(`Got a push! It was on ${this.context.payload.ref}`)
+    if (!this.isDefaultBranchPush() && !this.isReleaseBranchPush()) {
+      return
+    } else if (this.isReleaseBranchPush()) {
+      this.handleReleaseBranchPush()
+    } else {
+      this.handleDefaultBranchPush()
+    }
+  }
 
-      // 1. Find PR based on the ref
-      // 2. See if the PR is locked
-      // 3. If it is, see if the merge works now
-      // 4. If so, remove the lock!
-    } else if (context.payload.ref !== `refs/heads/${config.defaultBranch}`) {
+  public async regenerateChangelog() {
+    const { owner, repo, number } = this.context.issue()
+    this.context.log(`Regenerating changelog for PR #${number} due to the /regenerate command`)
+    const pr = await this.context.github.pulls.get({ owner, repo, pull_number: number })
+    await this.updateChangelogForPr(pr.data)
+  }
+
+  async handleReleaseBranchPush() {
+    // A branch we're managing has been updated!
+    // Maybe we're waiting for merge conflict resolution,
+    // or maybe someone pushed up something to be included
+    // in the release. Check the merge conflict stuff and
+    // regenerate the release notes.
+  }
+
+  async handleDefaultBranchPush() {
+    const pushedRef = new Ref(this.context.payload.ref, this.context.payload.after)
+    this.context.log(`Received push on ${pushedRef.branch} with sha ${pushedRef.sha}`)
+    let pr = await this.findReleasePr(this.config.baseBranch, this.config.botName)
+    if (pr) {
+      this.updateExistingPr(pr, pushedRef)
+    } else {
+      this.context.log(`No release PR found, creating...`)
+      pr = await this.createReleasePr(this.config.baseBranch)
+    }
+  }
+
+  async updateExistingPr(pr: PullsListResponseItem, pushedRef: Ref) {
+    const { context } = this
+    const releasePrRef = new Ref(pr.head.ref, pr.head.sha)
+    context.log(`Updating existing release PR #${pr.number} with branch ${releasePrRef.branch} and head ${releasePrRef.shortSha}`)
+
+    const isLocked = await this.lock.isPrLocked(pr.number)
+    if (isLocked) {
+      context.log(`Aborting updating PR #${pr.number} because it is locked due to a detected merge conflict`)
       return
     }
 
-    const pushedRef = new Ref(context.payload.ref, context.payload.after)
-
-    context.log(`Received push on ${pushedRef.branch} with sha ${pushedRef.sha}`)
-    const { created, pr } = await this.findOrCreateReleasePr(config)
-    const releasePrRef = new Ref(pr.head.ref, pr.head.sha)
-    context.log(`${created ? 'Created' : 'Found'} release PR #${pr.number} with branch ${releasePrRef.branch} and head ${releasePrRef.branch}`)
-
-    if (created) {
-      const locked = await this.isPrAutoUpdateLocked(pr.number)
-      if (locked) {
-        context.log(`Aborting updating PR ${pr.number} because there is still a merge conflict`)
-        // We've had a merge conflict in the past and we're waiting for the user to deal with it
-        return
-      }
-    }
-
     const needsBranchUpdate = releasePrRef.sha !== pushedRef.sha
-    if (needsBranchUpdate) {
-      try {
-        await this.updateBranch(releasePrRef, pushedRef)
-      } catch (err) {
-        if (err.message === 'Merge conflict') {
-          await context.github.issues.createComment(context.repo({
-            number: pr.number,
-            body: `There is a merge conflict between this branch and ${pushedRef.branch}. This PR will not be updated automatically from ${pushedRef.branch} until the merge conflict is resolved manually.`
-          }))
-          await this.lockPrAutoUpdates(pr.number)
-          return
-        } else {
-          throw err
-        }
+    if (!needsBranchUpdate) {
+      return
+    }
+
+    try {
+      await this.updateBranch(releasePrRef, pushedRef)
+      context.log(`Branch ${releasePrRef.branch} (from PR #${pr.number}) has been updated to ${pushedRef.shortSha}`)
+    } catch (err) {
+      if (err.message === 'Merge conflict') {
+        context.log(`Unable to update branch ${releasePrRef.branch} (from PR #${pr.number}) to ${pushedRef.shortSha}. Will comment to report...`)
+        const comment = await context.github.issues.createComment(context.repo({
+          number: pr.number,
+          body: `There is a merge conflict between this branch and ${pushedRef.branch}. This PR will not be updated automatically from ${pushedRef.branch} until the merge conflict is resolved manually.`
+        }))
+        context.log(`Created comment on PR #${pr.number}: ${comment.data.url}`)
+        context.log(`Locking PR #${pr.number}...`)
+        await this.lock.lockPr(pr.number)
+        context.log(`Locked #${pr.number}`)
+        return
+      } else {
+        throw err
       }
     }
 
-    if (created || needsBranchUpdate) {
-      // update the PR description with semver stuff
-      // TODO: if we created the PR, it should have this stuff in it already
-    }
+    await this.updateChangelogForPr(pr)
   }
 
-  async isPrAutoUpdateLocked(prNumber: number): Promise<boolean> {
-    const issue = this.context.repo({ number: prNumber })
-    const value = await metadata<boolean>(this.context, issue).get('awaiting_merge_conflict_resolution')
-    return value === true
-  }
-
-  async lockPrAutoUpdates (prNumber: number): Promise<void> {
-    const issue = this.context.repo({ number: prNumber })
-    await metadata<boolean>(this.context, issue).set('awaiting_merge_conflict_resolution', true)
-  }
-
-  async updateBranch (baseRef: Ref, headRef: Ref): Promise<void> {
-    try {
-      this.context.log(`Updating release PR branch ${baseRef.branch} from ${baseRef.shortSha} to ${headRef.shortSha}`)
-      await this.fastForwardBranch(baseRef, headRef.sha)
-    } catch (err) {
-      this.context.log(`Fast fowarding branch ${baseRef.branch} failed; attempting a merge instead`)
-      await this.mergeBranch(baseRef, headRef)
-      this.context.log(`Merge successful`)
-    }
-  }
-
-  async fastForwardBranch (refToUpdate: Ref, newHeadSha: string): Promise<void> {
-    await this.context.github.gitdata.updateRef(this.context.repo({
-      ref: `heads/${refToUpdate.branch}`, // note: do not include 'refs/` or the API call will fail
-      sha: newHeadSha
+  public async updateChangelogForPr(pr: PullsListResponseItem): Promise<void> {
+    const releasePrRef = new Ref(pr.head.ref, pr.head.sha)
+    this.context.log(`Finding commits between ${this.config.baseBranch} and ${releasePrRef.branch}`)
+    const commits = await this.git.findCommitsBetween(this.config.baseBranch, releasePrRef.branch)
+    this.context.log(`Found ${commits.length} commits`)
+    const changelog = await generateChangelog(commits)
+    this.context.log(`Updating changelog and labels for PR #${pr.number}`)
+    await this.context.github.issues.update(this.context.repo({
+      issue_number: pr.number,
+      body: `${changelog.changelog}\n\nVersion change: ${changelog.bumpType}`,
+      labels: this.labelsPlusSemver(pr.labels.map(l => l.name), `semver-${changelog.bumpType}`)
     }))
   }
 
-  async mergeBranch (baseRef: Ref, headRef: Ref): Promise<void> {
-    await this.context.github.repos.merge(this.context.repo({
-      base: baseRef.branch,
-      head: headRef.branch,
-      commit_message: `Auto-merging ${headRef.branch} into ${baseRef.branch}`
-    }))
+  isReleaseBranchPush(): boolean {
+    return this.context.payload.ref.startsWith('refs/heads/release/')
   }
 
-  async findOrCreateReleasePr (config: Config): Promise<{ created: boolean, pr: PullRequestsListResponseItem }> {
-    const existingPr = await this.findExistingReleasePr(config.baseBranch, config.botName)
-    const created = existingPr.caseOf({
-      just: () => false,
-      nothing: () => true
+  isDefaultBranchPush(): boolean {
+    return this.context.payload.ref === `refs/heads/${this.config.defaultBranch}`
+  }
+
+  labelsPlusSemver(currentLabels: string[], semverLabel: string): string[] {
+    const newLabels: Set<string> = new Set()
+    newLabels.add(semverLabel)
+    currentLabels.forEach(label => {
+      if (!label.startsWith('semver-')) {
+        newLabels.add(label)
+      }
     })
-    const pr = await existingPr.valueOrComputeAsync(() => this.createReleasePr(config.baseBranch))
 
-    return { created, pr }
+    return Array.from(newLabels)
   }
 
-  async findExistingReleasePr (baseBranch: string, botName: string): Promise<Maybe<PullRequestsListResponseItem>> {
+  // Finds the first open PR in the repo with the associated base branch
+  // where the user who opened the PR is the bot user.
+  async findReleasePr (baseBranch: string, botName: string): Promise<PullsListResponseItem | null> {
     const prSearch = this.context.repo({
       state: 'open',
       base: baseBranch,
       sort: 'created'
     })
     const pulls = await this.context.github.paginate(
-      this.context.github.pullRequests.list(prSearch),
-      (response, done) => {
+      this.context.github.pulls.list.endpoint.merge(prSearch),
+      (response: Response<PullsListResponse>, done: () => void) => {
         for (const pr of response.data) {
           if (pr.user.login === botName) {
-            done!()
+            done()
             break
           }
         }
@@ -136,50 +155,52 @@ class PushHandler extends Handler {
     )
 
     const pull = pulls.find(pull => pull.user.login === botName)
-    return pull ? Maybe.just(pull) : Maybe.nothing()
+    return pull || null
   }
 
-  async createReleasePr(baseBranch: string): Promise<PullRequestsListResponseItem> {
+  async createReleasePr(baseBranch: string): Promise<PullsListResponseItem> {
     const branchName = `release/${Math.floor(Math.random() * 1000000000)}`
     const newRef = this.context.repo({
       ref: `refs/heads/${branchName}`,
       sha: this.context.payload.after
     })
-    await this.context.github.gitdata.createRef(newRef)
+    await this.context.github.git.createRef(newRef)
+
+    // TODO: we need to figure out changelog and labels
+    // before we create this PR
+
+    const commits = await this.git.findCommitsBetween(baseBranch, branchName)
+    const changelog = await generateChangelog(commits)
+
+    const existingPr = await this.findReleasePr(baseBranch, this.config.botName)
+    if (existingPr) {
+      this.context.log(`Aborted creating release PR because one was created while we were waiting`)
+      return existingPr
+    }
 
     const newPr = this.context.repo({
       title: 'release branch!',
       head: `refs/heads/${branchName}`,
-      base: baseBranch
+      base: baseBranch,
+      body: `${changelog.changelog}\n\nVersion change: ${changelog.bumpType}`
     })
-    const pr = await this.context.github.pullRequests.create(newPr)
+    const pr = await this.context.github.pulls.create(newPr)
     await this.context.github.issues.addLabels(this.context.repo({
       number: pr.data.number,
-      labels: ['release-candidate', 'semver-pending']
+      labels: ['release-candidate', `semver-${changelog.bumpType}`]
     }))
     return pr.data
   }
-}
 
-
-
-class Ref {
-  public readonly branch: string
-  public readonly sha: string
-
-  constructor (branch: string, sha: string = '') {
-    this.sha = sha
-    if (branch.startsWith('refs/heads/')) {
-      this.branch = branch.substr(11)
-    } else if (branch.startsWith('heads/')) {
-      this.branch = branch.substr(6)
-    } else {
-      this.branch = branch
+  async updateBranch (baseRef: Ref, headRef: Ref): Promise<void> {
+    try {
+      this.context.log(`Updating release PR branch ${baseRef.branch} from ${baseRef.shortSha} to ${headRef.shortSha}`)
+      await this.git.fastForwardBranch(baseRef, headRef.sha)
+    } catch (err) {
+      this.context.log(`Fast fowarding branch ${baseRef.branch} failed; attempting a merge instead`)
+      await this.git.mergeBranch(baseRef, headRef)
+      this.context.log(`Merge successful`)
     }
   }
-
-  get ref () { return `refs/heads/${this.branch}` }
-  get shortSha() { return this.sha.substr(0, 8) }
 }
 
-export = PushHandler
