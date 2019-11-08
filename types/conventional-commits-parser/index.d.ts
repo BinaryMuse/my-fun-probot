@@ -6,4 +6,3 @@ declare module 'conventional-commits-parser' {
 
   export = parser
 }
-

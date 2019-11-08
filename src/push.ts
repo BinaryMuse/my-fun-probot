@@ -5,27 +5,27 @@ import { Config, DEFAULT_CONFIG } from './config'
 import { HandlerWithConfig } from './lib/handler'
 import { LockOps } from './lib/lock-ops'
 import { Ref, GitOps } from './lib/git-ops'
-import generateChangelog, { Changelog } from './lib/commit-parser'
+import generateChangelog from './lib/commit-parser'
 
 export default class PushHandler extends HandlerWithConfig<Config> {
   private git: GitOps
   private lock: LockOps
 
-  static async build(context: Context): Promise<PushHandler> {
+  static async build (context: Context): Promise<PushHandler> {
     const config = await context.config('my-fun-probot.yaml', DEFAULT_CONFIG) as Config
     return new this(context, config)
   }
 
-  constructor(context: Context, config: Config) {
+  constructor (context: Context, config: Config) {
     super(context, config)
     this.git = new GitOps(context)
     this.lock = new LockOps(context)
   }
 
-  public async handle() {
+  public async handle () {
     this.context.log(`Got a push! It was on ${this.context.payload.ref}`)
     if (!this.isDefaultBranchPush() && !this.isReleaseBranchPush()) {
-      return
+
     } else if (this.isReleaseBranchPush()) {
       this.handleReleaseBranchPush()
     } else {
@@ -33,14 +33,14 @@ export default class PushHandler extends HandlerWithConfig<Config> {
     }
   }
 
-  public async regenerateChangelog() {
+  public async regenerateChangelog () {
     const { owner, repo, number } = this.context.issue()
     this.context.log(`Regenerating changelog for PR #${number} due to the /regenerate command`)
     const pr = await this.context.github.pulls.get({ owner, repo, pull_number: number })
     await this.updateChangelogForPr(pr.data)
   }
 
-  async handleReleaseBranchPush() {
+  async handleReleaseBranchPush () {
     // A branch we're managing has been updated!
     // Maybe we're waiting for merge conflict resolution,
     // or maybe someone pushed up something to be included
@@ -48,7 +48,7 @@ export default class PushHandler extends HandlerWithConfig<Config> {
     // regenerate the release notes.
   }
 
-  async handleDefaultBranchPush() {
+  async handleDefaultBranchPush () {
     const pushedRef = new Ref(this.context.payload.ref, this.context.payload.after)
     this.context.log(`Received push on ${pushedRef.branch} with sha ${pushedRef.sha}`)
     let pr = await this.findReleasePr(this.config.baseBranch, this.config.botName)
@@ -60,7 +60,7 @@ export default class PushHandler extends HandlerWithConfig<Config> {
     }
   }
 
-  async updateExistingPr(pr: PullsListResponseItem, pushedRef: Ref) {
+  async updateExistingPr (pr: PullsListResponseItem, pushedRef: Ref) {
     const { context } = this
     const releasePrRef = new Ref(pr.head.ref, pr.head.sha)
     context.log(`Updating existing release PR #${pr.number} with branch ${releasePrRef.branch} and head ${releasePrRef.shortSha}`)
@@ -99,7 +99,7 @@ export default class PushHandler extends HandlerWithConfig<Config> {
     await this.updateChangelogForPr(pr)
   }
 
-  public async updateChangelogForPr(pr: PullsListResponseItem): Promise<void> {
+  public async updateChangelogForPr (pr: PullsListResponseItem): Promise<void> {
     const releasePrRef = new Ref(pr.head.ref, pr.head.sha)
     this.context.log(`Finding commits between ${this.config.baseBranch} and ${releasePrRef.branch}`)
     const commits = await this.git.findCommitsBetween(this.config.baseBranch, releasePrRef.branch)
@@ -113,15 +113,15 @@ export default class PushHandler extends HandlerWithConfig<Config> {
     }))
   }
 
-  isReleaseBranchPush(): boolean {
+  isReleaseBranchPush (): boolean {
     return this.context.payload.ref.startsWith('refs/heads/release/')
   }
 
-  isDefaultBranchPush(): boolean {
+  isDefaultBranchPush (): boolean {
     return this.context.payload.ref === `refs/heads/${this.config.defaultBranch}`
   }
 
-  labelsPlusSemver(currentLabels: string[], semverLabel: string): string[] {
+  labelsPlusSemver (currentLabels: string[], semverLabel: string): string[] {
     const newLabels: Set<string> = new Set()
     newLabels.add(semverLabel)
     currentLabels.forEach(label => {
@@ -158,7 +158,7 @@ export default class PushHandler extends HandlerWithConfig<Config> {
     return pull || null
   }
 
-  async createReleasePr(baseBranch: string): Promise<PullsListResponseItem> {
+  async createReleasePr (baseBranch: string): Promise<PullsListResponseItem> {
     const branchName = `release/${Math.floor(Math.random() * 1000000000)}`
     const newRef = this.context.repo({
       ref: `refs/heads/${branchName}`,
@@ -203,4 +203,3 @@ export default class PushHandler extends HandlerWithConfig<Config> {
     }
   }
 }
-

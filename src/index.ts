@@ -14,7 +14,3 @@ export = (app: Application) => {
     handler.regenerateChangelog()
   })
 }
-
-async function handleIssueComment (context: Context): Promise<void> {
-  // check to see if is a command? or should we just use the plugin?
-}
